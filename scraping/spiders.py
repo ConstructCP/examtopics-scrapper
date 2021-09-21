@@ -1,7 +1,11 @@
+from io import BytesIO
+
 import scrapy
 from scrapy.http.response.html import HtmlResponse
 from selenium import webdriver
 import selenium.common.exceptions as selenium_exceptions
+import urllib.parse
+from PIL import Image
 
 from scraping.xpath import Xpath
 
@@ -24,17 +28,19 @@ class QuestionSpider(scrapy.Spider):
         self.driver.get(response.request.url)
         self.solve_captcha(response)
         self.close_last_page_disclaimer()
-        while True:
-            for number_on_page, question in enumerate(response.xpath('//' + Xpath.QUESTION_LIST)):
-                self.press_reveal_solution(number_on_page)
-                parsed_question = self.parse_question(question)
-                yield parsed_question
-            try:
-                next_page_relative_url = self.get_next_page(response)
-                next_page_full_url = response.urljoin(next_page_relative_url)
-                yield scrapy.Request(next_page_full_url, callback=self.parse)
-            except LastPage:
-                break
+        page_selector = scrapy.Selector(text=self.driver.page_source)
+        for number_on_page, question in enumerate(page_selector.xpath('//' + Xpath.QUESTION_LIST)):
+            # self.press_reveal_solution(number_on_page)
+            parsed_question = self.parse_question(question)
+            yield parsed_question
+        try:
+            next_page_relative_url = self.get_next_page(page_selector)
+            # next_page_full_url = page_selector.urljoin(next_page_relative_url)
+            next_page_full_url = urllib.parse.urljoin(self.driver.current_url, next_page_relative_url)
+            next_page_request = scrapy.Request(next_page_full_url, callback=self.parse)
+            yield next_page_request
+        except LastPage:
+            pass
 
     def parse_question(self, question_selector: scrapy.Selector) -> dict:
         """ Parse single question """
@@ -82,9 +88,24 @@ class QuestionSpider(scrapy.Spider):
         """ Stub for captcha resolve """
         not_a_robot_xpath = f'//{Xpath.BUTTON_NOT_A_ROBOT}'
         self.press_button(not_a_robot_xpath)
-        captcha_xpath = f'//{Xpath.CAPTCHA}'
-        captcha_frame = response.xpath(captcha_xpath)
-        # Implement captcha resolve here
+        captcha_container_xpath = f'//{Xpath.CAPTCHA}/../..'
+        try:
+            captcha_container = self.driver.find_element_by_xpath(captcha_container_xpath)
+        except selenium_exceptions.NoSuchElementException:
+            return
+        if captcha_container:
+            captcha_location = captcha_container.location
+            captcha_size = captcha_container.size
+            screenshot = self.driver.get_screenshot_as_png()
+
+            image = Image.open(BytesIO(screenshot))
+            left = captcha_location['x']
+            top = captcha_location['y']
+            right = captcha_location['x'] + captcha_size['width']
+            bottom = captcha_location['y'] + captcha_size['height']
+            cropped_image = image.crop((left, top, right, bottom))
+            cropped_image.save('captcha_screenshot.png')
+            # Implement captcha resolve here
         pass
 
     def press_button(self, button_xpath: str) -> None:
@@ -95,9 +116,6 @@ class QuestionSpider(scrapy.Spider):
         except selenium_exceptions.NoSuchElementException:
             # Suppress for now
             pass
-
-
-
 
 
 class LastPage(Exception):
