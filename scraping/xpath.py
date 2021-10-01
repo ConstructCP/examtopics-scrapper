@@ -4,7 +4,13 @@ class Xpath:
     BUTTON_NEXT_PAGE = "a[contains(@class, 'btn-success') and contains(text(), 'Next Questions')]"
     BUTTON_NOT_A_ROBOT = "button[contains(@class, 'g-recaptcha')]"
     BUTTON_LAST_PAGE_DISCLAIMER = """button[contains(text(), "Close and don't show again")]"""
-    CAPTCHA = "iframe[contains(@title, 'Main content of the hCaptcha challenge')]"
+    BUTTON_CAPTCHA_VERIFY = "div[contains(@title, 'Submit Answers') or contains(@title, 'Next Challenge') " \
+                            "or contains(@title, 'Skip Challenge')]"
+    CAPTCHA_FRAME = "iframe[contains(@title, 'Main content of the hCaptcha challenge')]"
+    CAPTCHA_CONTAINER = CAPTCHA_FRAME + '/../..'
+    CAPTCHA_TASK_GRID = "div[@class='task-grid']"
+    CAPTCHA_TASK_DESCRIPTION = "div[@class='prompt-text']"
+    CAPTCHA_TASK_IMAGE = "div[@class='task-grid']/div[@class='task-image']"
     QUESTION_LIST = "div[@class='questions-container']/div[contains(@class, 'exam-question-card')]"
     QUESTION_HEADER = "div[contains(@class, 'card-header')]"
     QUESTION_BODY = "div[contains(@class, 'card-body')]"

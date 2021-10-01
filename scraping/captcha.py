@@ -3,7 +3,8 @@ import time
 import requests
 import re
 import base64
-from constants import _2captcha_api_key
+from constants import RETRY_CAPTCHA_ATTEMPTS
+from secrets import twocaptcha_api_key
 
 
 class CaptchaSolver:
@@ -18,7 +19,7 @@ class CaptchaSolver:
     def prepare_send_image_request(self) -> Dict:
         """ Prepare request body for send image request """
         request_data = {
-            'key': _2captcha_api_key,
+            'key': twocaptcha_api_key,
             'method': 'base64',
             'recaptcha': 1,
             'body': self.base64_image,
@@ -33,7 +34,7 @@ class CaptchaSolver:
     def prepare_get_response_request(self, request_id: str) -> Dict:
         """ Prepare request body for get response request """
         request_data = {
-            'key': _2captcha_api_key,
+            'key': twocaptcha_api_key,
             'action': 'get',
             'id': request_id
         }
@@ -55,7 +56,7 @@ class CaptchaSolver:
         while True:
             time.sleep(5)
             recognition_status_request_data = {
-                'key': _2captcha_api_key,
+                'key': twocaptcha_api_key,
                 'action': 'get',
                 'id': request_id
             }
@@ -72,9 +73,16 @@ class CaptchaSolver:
 
     def solve_captcha(self) -> List[int]:
         """ Solve captcha and return numbers of images to click """
-        request_id = self.send_image_for_recognition()
-        image_numbers_to_click = self.get_recognition_response(request_id)
-        return image_numbers_to_click
+        retries = 0
+        while True:
+            try:
+                request_id = self.send_image_for_recognition()
+                image_numbers_to_click = self.get_recognition_response(request_id)
+                return image_numbers_to_click
+            except BadCaptchaRequest as e:
+                retries += 1
+                if retries > RETRY_CAPTCHA_ATTEMPTS:
+                    raise e
 
 
 class BadCaptchaRequest(Exception):

@@ -4,7 +4,7 @@ from scraping.spiders import QuestionSpider
 
 
 if __name__ == '__main__':
-    githubJob = Job(QuestionSpider)
+    scraping_job = Job(QuestionSpider, page_limit=2)
 
     processor = Processor(settings={
         'FEED_URI': 'questions_' + datetime.datetime.today().strftime('%y%m%d') + '.json',
@@ -15,4 +15,4 @@ if __name__ == '__main__':
         'FEED_EXPORT_ENCODING': 'utf-8',
     })
 
-    data = processor.run([githubJob])
+    data = processor.run([scraping_job])

@@ -1,22 +1,32 @@
+import base64
 from io import BytesIO
+from time import sleep
+from typing import Tuple, Dict
 
 import scrapy
+from scrapy import Selector
 from scrapy.http.response.html import HtmlResponse
 from selenium import webdriver
 import selenium.common.exceptions as selenium_exceptions
 import urllib.parse
 from PIL import Image
+from selenium.webdriver.common.by import By
 
+from constants import RETRY_NUMBER_PER_PAGE
 from scraping.xpath import Xpath
+from scraping.captcha import CaptchaSolver
 
 
 class QuestionSpider(scrapy.Spider):
     name = 'questions'
-    start_urls = ['https://www.examtopics.com/exams/amazon/aws-certified-solutions-architect-associate-saa-c02/view/']
+    # start_urls = ['https://www.examtopics.com/exams/amazon/aws-certified-solutions-architect-associate-saa-c02/view/']
+    start_urls = ['https://www.examtopics.com/exams/microsoft/70-332/view/2']
 
-    def __init__(self):
+    def __init__(self, page_limit: int = None):
         """ Initialize webdriver """
         self.driver = webdriver.Firefox()
+        self.pages_scrapped = 0
+        self.page_limit = page_limit
         super().__init__()
 
     def __del__(self):
@@ -25,18 +35,27 @@ class QuestionSpider(scrapy.Spider):
 
     def parse(self, response: HtmlResponse) -> None:
         """ Parse URL """
+        if self.page_limit and self.page_limit == self.pages_scrapped:
+            return
         self.driver.get(response.request.url)
-        self.solve_captcha(response)
+        current_url = response.request.url
+        sleep(1)
+        not_a_robot_button_xpath = '//' + Xpath.BUTTON_NOT_A_ROBOT
+        not_a_robot_button = response.xpath(not_a_robot_button_xpath)
+        if not_a_robot_button:
+            self.press_button(not_a_robot_button_xpath)
+            self.solve_captcha(response)
+            response = scrapy.Selector(text=self.driver.page_source)
         self.close_last_page_disclaimer()
-        page_selector = scrapy.Selector(text=self.driver.page_source)
-        for number_on_page, question in enumerate(page_selector.xpath('//' + Xpath.QUESTION_LIST)):
-            # self.press_reveal_solution(number_on_page)
+
+        question_list = response.xpath('//' + Xpath.QUESTION_LIST)
+        for number_on_page, question in enumerate(question_list):
             parsed_question = self.parse_question(question)
             yield parsed_question
         try:
-            next_page_relative_url = self.get_next_page(page_selector)
-            # next_page_full_url = page_selector.urljoin(next_page_relative_url)
-            next_page_full_url = urllib.parse.urljoin(self.driver.current_url, next_page_relative_url)
+            self.pages_scrapped += 1
+            next_page_relative_url = self.get_next_page(response)
+            next_page_full_url = urllib.parse.urljoin(current_url, next_page_relative_url)
             next_page_request = scrapy.Request(next_page_full_url, callback=self.parse)
             yield next_page_request
         except LastPage:
@@ -46,7 +65,8 @@ class QuestionSpider(scrapy.Spider):
         """ Parse single question """
         question_title = question_selector.xpath('.//' + Xpath.QUESTION_TITLE).get().strip()
         question_topic = question_selector.xpath('.//' + Xpath.QUESTION_TOPIC).get().strip()
-        question_text = question_selector.xpath(".//" + Xpath.QUESTION_TEXT).get().strip()
+        text_as_lines = question_selector.xpath(".//" + Xpath.QUESTION_TEXT).extract()
+        question_text = '\n'.join(map(lambda s: s.strip(), text_as_lines))
         variants = {}
         for variant in question_selector.xpath(".//" + Xpath.QUESTION_ANSWER_VARIANTS):
             variant_letter = variant.xpath(".//" + Xpath.QUESTION_VARIANT_LETTER).get().strip(' .\n\t')
@@ -75,7 +95,11 @@ class QuestionSpider(scrapy.Spider):
     def close_last_page_disclaimer(self) -> None:
         """ Close disclaimer window on the last page """
         xpath = f'//{Xpath.BUTTON_LAST_PAGE_DISCLAIMER}'
-        self.press_button(xpath)
+        try:
+            button = self.driver.find_element_by_xpath(xpath)
+            self.press_button(button)
+        except selenium_exceptions.NoSuchElementException:
+            pass
 
     def get_next_page(self, response: HtmlResponse) -> str:
         next_page_button = response.xpath('//' + Xpath.BUTTON_NEXT_PAGE)
@@ -85,38 +109,80 @@ class QuestionSpider(scrapy.Spider):
             return next_page_button.attrib['href']
 
     def solve_captcha(self, response: HtmlResponse) -> None:
-        """ Stub for captcha resolve """
-        not_a_robot_xpath = f'//{Xpath.BUTTON_NOT_A_ROBOT}'
-        self.press_button(not_a_robot_xpath)
-        captcha_container_xpath = f'//{Xpath.CAPTCHA}/../..'
+        """ Solve captcha """
+        retries = 0
         try:
-            captcha_container = self.driver.find_element_by_xpath(captcha_container_xpath)
+            while captcha := self.driver.find_element_by_xpath(f'//{Xpath.CAPTCHA_FRAME}'):
+                captcha_container = self.driver.find_element_by_xpath(f'//{Xpath.CAPTCHA_CONTAINER}')
+                captcha_location = captcha_container.location
+                try:
+                    # captcha = self.driver.find_element_by_xpath(f'//{Xpath.CAPTCHA_FRAME}')
+                    self.driver.switch_to.frame(captcha)
+                    captcha_task_description = self.driver.find_element_by_xpath(f'//{Xpath.CAPTCHA_TASK_DESCRIPTION}').text
+                    captcha_task_grid = self.driver.find_element_by_xpath(f'//{Xpath.CAPTCHA_TASK_GRID}')
+                    captcha_task_grid_location = self.get_absolute_position_of_element(
+                        captcha_location, captcha_task_grid.location, captcha_task_grid.size)
+                    captcha_screenshot_base64 = self.screenshot_screen_area(*captcha_task_grid_location)
+                    captcha_solver = CaptchaSolver(captcha_screenshot_base64, captcha_task_description)
+                    images_to_click = captcha_solver.solve_captcha()
+                    for image_number in images_to_click:
+                        self.press_button(f'//{Xpath.CAPTCHA_TASK_IMAGE}[{image_number}]')
+                    self.press_button(f'//{Xpath.BUTTON_CAPTCHA_VERIFY}')
+                    sleep(5)
+                    self.driver.switch_to.default_content()
+                except selenium_exceptions.NoSuchElementException:
+                    retries += 1
+                    if retries >= RETRY_NUMBER_PER_PAGE:
+                        raise UnableToBypassCaptcha
+                    self.driver.refresh()
         except selenium_exceptions.NoSuchElementException:
             return
-        if captcha_container:
-            captcha_location = captcha_container.location
-            captcha_size = captcha_container.size
-            screenshot = self.driver.get_screenshot_as_png()
 
-            image = Image.open(BytesIO(screenshot))
-            left = captcha_location['x']
-            top = captcha_location['y']
-            right = captcha_location['x'] + captcha_size['width']
-            bottom = captcha_location['y'] + captcha_size['height']
-            cropped_image = image.crop((left, top, right, bottom))
-            cropped_image.save('captcha_screenshot.png')
-            # Implement captcha resolve here
-        pass
+    def get_absolute_position_of_element(self, outer_frame: Dict,
+                                         position_in_frame: Dict,
+                                         element_size: Dict) -> Tuple[int, int, int, int]:
+        """ Calculate absolute position of element in dynamically loaded frame """
+        left = outer_frame['x'] + position_in_frame['x']
+        top = outer_frame['y'] + position_in_frame['y']
+        bottom = top + element_size['height']
+        right = left + element_size['width']
+        return top, left, bottom, right
 
-    def press_button(self, button_xpath: str) -> None:
-        """ Find and press button with given xpath """
-        try:
-            button = self.driver.find_element_by_xpath(button_xpath)
-            self.driver.execute_script("arguments[0].click();", button)
-        except selenium_exceptions.NoSuchElementException:
-            # Suppress for now
-            pass
+    def screenshot_screen_area(self, top, left, bottom, right) -> str:
+        """ Get screenshot of a page and crop to element """
+        screenshot = self.driver.get_screenshot_as_png()
+        image = Image.open(BytesIO(screenshot))
+        cropped_image = image.crop((left, top, right, bottom))
+        cropped_image_rgb = cropped_image.convert('RGB')
+        buffered = BytesIO()
+        cropped_image_rgb.save(buffered, format="JPEG")
+        base64_image = base64.b64encode(buffered.getvalue())
+        return base64_image
+
+    def press_button(self, button_xpath: str = None, button_object: Selector = None) -> None:
+        """ Find and press button with given xpath or given button object"""
+        if button_xpath:
+            retries = 0
+            while True:
+                sleep(1)
+                try:
+                    button = self.driver.find_element_by_xpath(button_xpath)
+                    self.driver.execute_script("arguments[0].click();", button)
+                    sleep(1)
+                    break
+                except selenium_exceptions.NoSuchElementException as e:
+                    retries += 1
+                    if retries >= RETRY_NUMBER_PER_PAGE:
+                        raise e
+        elif button_object:
+            self.driver.execute_script("arguments[0].click();", button_object)
+        else:
+            raise AttributeError('Either button_xpath or button_object mut be passed to press_button function.')
 
 
 class LastPage(Exception):
+    pass
+
+
+class UnableToBypassCaptcha(Exception):
     pass
