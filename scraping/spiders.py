@@ -1,7 +1,7 @@
 import base64
 from io import BytesIO
 from time import sleep
-from typing import Tuple, Dict
+from typing import Tuple, Dict, List
 
 import scrapy
 from scrapy import Selector
@@ -15,6 +15,74 @@ from selenium.webdriver.common.by import By
 from constants import RETRY_NUMBER_PER_PAGE
 from scraping.xpath import Xpath
 from scraping.captcha import CaptchaSolver
+
+
+class ExamtopicsSpider(scrapy.Spider):
+    name = 'examtopics'
+    cache_url = 'https://webcache.googleusercontent.com/search?q=cache:'
+
+    def __init__(self, start_urls: List, question_limit: int = None) -> None:
+        self.start_urls = start_urls
+        self.questions_scrapped = 0
+        self.question_limit = question_limit
+        super().__init__()
+
+    def parse(self, response, **kwargs):
+        cached_url = self.cache_url + response.request.url
+        cache_request = scrapy.Request(cached_url, callback=self.parse_cached,
+                                       cb_kwargs=dict(original_url=response.request.url))
+        yield cache_request
+
+    def parse_cached(self, response, **kwargs):
+        question_list = response.xpath('//' + Xpath.QUESTION_LIST)
+        for number_on_page, question in enumerate(question_list):
+            parsed_question = self.parse_question(question)
+            yield parsed_question
+            self.questions_scrapped += 1
+            if self.question_limit and self.question_limit <= self.questions_scrapped:
+                return
+        try:
+            next_page_relative_url = self.get_next_page(response)
+            original_url = kwargs['original_url']
+            next_page_full_url = urllib.parse.urljoin(original_url, next_page_relative_url)
+            next_page_cache_url = self.cache_url + next_page_full_url
+            next_page_request = scrapy.Request(next_page_cache_url, callback=self.parse)
+            yield next_page_request
+        except LastPage:
+            pass
+
+    def parse_question(self, question_selector: scrapy.Selector) -> dict:
+        """ Parse single question """
+        question_title = question_selector.xpath('.//' + Xpath.QUESTION_TITLE).get().strip()
+        question_topic = question_selector.xpath('.//' + Xpath.QUESTION_TOPIC).get().strip()
+        text_as_lines = question_selector.xpath(".//" + Xpath.QUESTION_TEXT).extract()
+        question_text = '\n'.join(map(lambda s: s.strip(), text_as_lines))
+        variants = {}
+        for variant in question_selector.xpath(".//" + Xpath.QUESTION_ANSWER_VARIANTS):
+            variant_letter = variant.xpath(".//" + Xpath.QUESTION_VARIANT_LETTER).get().strip(' .\n\t')
+            variant_text = variant.xpath(".//" + Xpath.QUESTION_VARIANT_TEXT).get().strip()
+            variants[variant_letter] = variant_text
+        correct_answer = question_selector.xpath(".//" + Xpath.QUESTION_CORRECT_ANSWER_LETTER).get()
+        correct_answer_comment_raw = question_selector.xpath(".//" + Xpath.QUESTION_CORRECT_ANSWER_COMMENT).extract()
+        correct_answer_comment = '\n'.join((map(lambda s: s.strip(), correct_answer_comment_raw)))
+        comments_number = question_selector.xpath(".//" + Xpath.QUESTION_NUMBER_OF_COMMENTS).get()
+
+        return {
+            'title': question_title,
+            'topic': question_topic,
+            'text': question_text,
+            'variants': variants,
+            'answer': correct_answer,
+            'answer_comment': correct_answer_comment,
+            'number_of_comments': comments_number
+        }
+
+    def get_next_page(self, response: HtmlResponse) -> str:
+        next_page_button = response.xpath('//' + Xpath.BUTTON_NEXT_PAGE)
+        if not next_page_button:
+            raise LastPage
+        else:
+            return next_page_button.attrib['href']
 
 
 class QuestionSpider(scrapy.Spider):

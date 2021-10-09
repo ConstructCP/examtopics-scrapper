@@ -1,10 +1,11 @@
 import datetime
 from scrapyscript import Job, Processor
-from scraping.spiders import QuestionSpider
+from scraping.spiders import ExamtopicsSpider
 
 
 if __name__ == '__main__':
-    scraping_job = Job(QuestionSpider, page_limit=2)
+    # scraping_job = Job(ExamtopicsSpider, start_urls=['https://www.examtopics.com/exams/amazon/aws-certified-solutions-architect-associate-saa-c02/view'])
+    scraping_job = Job(ExamtopicsSpider, start_urls=['https://www.examtopics.com/exams/microsoft/70-332/view'])
 
     processor = Processor(settings={
         'FEED_URI': 'questions_' + datetime.datetime.today().strftime('%y%m%d') + '.json',
