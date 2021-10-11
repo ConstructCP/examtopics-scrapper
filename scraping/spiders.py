@@ -1,4 +1,5 @@
 import base64
+import re
 from io import BytesIO
 from time import sleep
 from typing import Tuple, Dict, List, Union
@@ -14,56 +15,53 @@ from PIL import Image
 
 from constants import RETRY_NUMBER_PER_PAGE
 from scraping.xpath import Xpath
-from scraping.captcha import CaptchaSolver
+from scraping.captcha_solver import CaptchaSolver
 from secrets import web_scraping_api_key
 
 
 class QuestionSpider(scrapy.Spider):
     name = 'questions'
-    start_urls = ['https://www.examtopics.com/exams/amazon/aws-certified-solutions-architect-associate-saa-c02/view/']
-    # start_urls = ['https://www.examtopics.com/exams/microsoft/70-332/view/2']
+    # start_urls = ['https://www.examtopics.com/exams/amazon/aws-certified-solutions-architect-associate-saa-c02/view/']
+    start_urls = ['https://www.examtopics.com/exams/microsoft/70-332/view']
 
-    def __init__(self, page_limit: int = None, start_urls: List = None):
+    def __init__(self, page_limit: int = None):
         """ Initialize webdriver """
-        self.driver = webdriver.Firefox()
         self.pages_scrapped = 0
         self.page_limit = page_limit
         super().__init__()
 
-    def __del__(self):
-        """ Close webdriver """
-        self.driver.close()
-
     def start_requests(self):
         for url in self.start_urls:
             if google_cache_url := self.search_google_cache(url):
-                url = google_cache_url
-            proxy_url = self.url_through_proxy(url)
-            yield scrapy.Request(url=proxy_url, callback=self.parse)
+                proxy_url = self.url_through_proxy(google_cache_url)
+                yield scrapy.Request(url=proxy_url, callback=self.parse)
+            else:
+                yield scrapy.Request(url=url, callback=self.parse)
 
     def parse(self, response: HtmlResponse) -> None:
         """ Parse URL """
         if self.page_limit and self.page_limit == self.pages_scrapped:
             return
-        self.driver.get(response.request.url)
-        current_url = response.request.url
-        sleep(1)
+        if 'https://api.webscrapingapi.com' in response.request.url:
+            current_page_url = re.search(r'url=(http[s]*://.*)', response.request.url).group(1)
+        else:
+            current_page_url = response.request.url
         not_a_robot_button_xpath = '//' + Xpath.BUTTON_NOT_A_ROBOT
         not_a_robot_button = response.xpath(not_a_robot_button_xpath)
         if not_a_robot_button:
-            self.press_button(not_a_robot_button_xpath)
-            self.solve_captcha(response)
-            response = scrapy.Selector(text=self.driver.page_source)
-        self.close_last_page_disclaimer()
+            driver = WebDriver(response.request.url)
+            driver.press_button(not_a_robot_button_xpath)
+            driver.solve_captcha(response)
+            response = scrapy.Selector(text=driver.get_current_source())
 
         question_list = response.xpath('//' + Xpath.QUESTION_LIST)
         self.parse_question_list(question_list)
         self.pages_scrapped += 1
         try:
-            next_page_url = self.get_next_page_url(response)
+            next_page_url = self.get_next_page_url(response, current_page_url)
             if google_cache_url := self.search_google_cache(next_page_url):
-                next_page_url = google_cache_url
-            next_page_request = scrapy.Request(self.url_through_proxy(next_page_url), callback=self.parse)
+                next_page_url = self.url_through_proxy(google_cache_url)
+            next_page_request = scrapy.Request(next_page_url, callback=self.parse)
             yield next_page_request
         except LastPage:
             pass
@@ -115,10 +113,26 @@ class QuestionSpider(scrapy.Spider):
         proxy_url = 'https://api.webscrapingapi.com/v1/?api_key=' + web_scraping_api_key + '&url=' + url
         return proxy_url
 
-    def press_reveal_solution(self, number_on_page: int) -> None:
-        """ Press "Reveal Solution" button for the question with given number """
-        xpath = f'//{Xpath.QUESTION_LIST}[{number_on_page + 1}]/{Xpath.BUTTON_REVEAL_SOLUTION}'
-        self.press_button(xpath)
+    def get_next_page_url(self, response: HtmlResponse, current_page_url: str = None) -> str:
+        """ Find next page button and extract URL of next page. Concatenate it with domain name """
+        next_page_button = response.xpath('//' + Xpath.BUTTON_NEXT_PAGE)
+        if not next_page_button:
+            raise LastPage
+        else:
+            next_page_relative_url = next_page_button.attrib['href']
+            next_page_full_url = urllib.parse.urljoin(current_page_url, next_page_relative_url)
+            return next_page_full_url
+
+
+class WebDriver:
+    def __init__(self, url):
+        """ Initialize webdriver """
+        self.driver = webdriver.Firefox()
+        self.driver.get(url)
+
+    def __del__(self):
+        """ Close webdriver """
+        self.driver.close()
 
     def close_last_page_disclaimer(self) -> None:
         """ Close disclaimer window on the last page """
@@ -128,17 +142,6 @@ class QuestionSpider(scrapy.Spider):
             self.press_button(button)
         except selenium_exceptions.NoSuchElementException:
             pass
-
-    def get_next_page_url(self, response: HtmlResponse) -> str:
-        """ Find next page button and extract URL of next page. Concatenate it with domain name """
-        next_page_button = response.xpath('//' + Xpath.BUTTON_NEXT_PAGE)
-        if not next_page_button:
-            raise LastPage
-        else:
-            current_url = response.request.url
-            next_page_relative_url = next_page_button.attrib['href']
-            next_page_full_url = urllib.parse.urljoin(current_url, next_page_relative_url)
-            return next_page_full_url
 
     def solve_captcha(self, response: HtmlResponse) -> None:
         """ Solve captcha """
@@ -210,6 +213,9 @@ class QuestionSpider(scrapy.Spider):
             self.driver.execute_script("arguments[0].click();", button_object)
         else:
             raise AttributeError('Either button_xpath or button_object mut be passed to press_button function.')
+
+    def get_current_source(self):
+        return self.driver.page_source
 
 
 class LastPage(Exception):
