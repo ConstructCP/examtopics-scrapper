@@ -1,11 +1,17 @@
 import datetime
+import sys
+import argparse
 from scrapyscript import Job, Processor
 from scraping.spiders import QuestionSpider
 
 
 if __name__ == '__main__':
-    # scraping_job = Job(ExamtopicsSpider, start_urls=['https://www.examtopics.com/exams/amazon/aws-certified-solutions-architect-associate-saa-c02/view'])
-    scraping_job = Job(QuestionSpider, page_limit=3)
+    parser = argparse.ArgumentParser()
+    parser.add_argument('url', help='First page of the questions you want to scrap')
+    parser.add_argument('--page_limit', help='Limit of pages to scrap')
+    args = parser.parse_args()
+
+    scraping_job = Job(QuestionSpider, start_urls=[args.url], page_limit=args.page_limit)
 
     processor = Processor(settings={
         'FEED_URI': 'questions_' + datetime.datetime.today().strftime('%y%m%d') + '.json',

@@ -1,5 +1,5 @@
 import re
-from typing import Union
+from typing import Union, List
 
 import requests
 import scrapy
@@ -13,13 +13,12 @@ from secrets import web_scraping_api_key
 
 class QuestionSpider(scrapy.Spider):
     name = 'questions'
-    # start_urls = ['https://www.examtopics.com/exams/amazon/aws-certified-solutions-architect-associate-saa-c02/view/']
-    start_urls = ['https://www.examtopics.com/exams/microsoft/70-332/view']
 
-    def __init__(self, page_limit: int = None):
+    def __init__(self, start_urls: List[str], page_limit: int = None):
         """ Initialize webdriver """
         self.pages_scrapped = 0
         self.page_limit = page_limit
+        self.start_urls = start_urls
         super().__init__()
 
     def start_requests(self):
