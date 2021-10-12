@@ -1,5 +1,4 @@
 import datetime
-import sys
 import argparse
 from scrapyscript import Job, Processor
 from scraping.spiders import QuestionSpider
