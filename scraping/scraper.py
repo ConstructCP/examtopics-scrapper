@@ -4,7 +4,8 @@ from scraping.spiders import QuestionSpider
 
 
 if __name__ == '__main__':
-    scraping_job = Job(QuestionSpider, page_limit=2)
+    # scraping_job = Job(ExamtopicsSpider, start_urls=['https://www.examtopics.com/exams/amazon/aws-certified-solutions-architect-associate-saa-c02/view'])
+    scraping_job = Job(QuestionSpider, page_limit=3)
 
     processor = Processor(settings={
         'FEED_URI': 'questions_' + datetime.datetime.today().strftime('%y%m%d') + '.json',
