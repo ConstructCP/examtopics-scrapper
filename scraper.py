@@ -10,7 +10,7 @@ if __name__ == '__main__':
     parser.add_argument('--page_limit', help='Limit of pages to scrap')
     args = parser.parse_args()
 
-    scraping_job = Job(QuestionSpider, start_urls=[args.url], page_limit=args.page_limit)
+    scraping_job = Job(QuestionSpider, start_url=args.url, page_limit=int(args.page_limit))
 
     processor = Processor(settings={
         'FEED_URI': 'questions_' + datetime.datetime.today().strftime('%y%m%d') + '.json',

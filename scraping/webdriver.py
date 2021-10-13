@@ -17,7 +17,9 @@ from scraping.captcha_solver import CaptchaSolver
 class WebDriver:
     def __init__(self, url):
         """ Initialize webdriver """
-        self.driver = webdriver.Firefox()
+        options = webdriver.FirefoxOptions()
+        options.headless = True
+        self.driver = webdriver.Firefox(options=options)
         self.driver.get(url)
 
     def __del__(self):
@@ -38,16 +40,16 @@ class WebDriver:
         retries = 0
         try:
             while captcha := self.driver.find_element_by_xpath(f'//{Xpath.CAPTCHA_FRAME}'):
-                captcha_container = self.driver.find_element_by_xpath(f'//{Xpath.CAPTCHA_CONTAINER}')
-                captcha_location = captcha_container.location
                 try:
-                    # captcha = self.driver.find_element_by_xpath(f'//{Xpath.CAPTCHA_FRAME}')
                     self.driver.switch_to.frame(captcha)
-                    captcha_task_description = self.driver.find_element_by_xpath(f'//{Xpath.CAPTCHA_TASK_DESCRIPTION}').text
+                    try:
+                        captcha_task_description = self.driver.find_element_by_xpath(
+                            f'//{Xpath.CAPTCHA_TASK_DESCRIPTION}').text
+                    except selenium_exceptions.NoSuchElementException:
+                        screen = self.driver.get_screenshot_as_base64()
+                        raise selenium_exceptions.NoSuchElementException
                     captcha_task_grid = self.driver.find_element_by_xpath(f'//{Xpath.CAPTCHA_TASK_GRID}')
-                    captcha_task_grid_location = self.get_absolute_position_of_element(
-                        captcha_location, captcha_task_grid.location, captcha_task_grid.size)
-                    captcha_screenshot_base64 = self.screenshot_screen_area(*captcha_task_grid_location)
+                    captcha_screenshot_base64 = captcha_task_grid.screenshot_as_base64
                     captcha_solver = CaptchaSolver(captcha_screenshot_base64, captcha_task_description)
                     images_to_click = captcha_solver.solve_captcha()
                     for image_number in images_to_click:
@@ -89,7 +91,6 @@ class WebDriver:
         if button_xpath:
             retries = 0
             while True:
-                sleep(1)
                 try:
                     button = self.driver.find_element_by_xpath(button_xpath)
                     self.driver.execute_script("arguments[0].click();", button)

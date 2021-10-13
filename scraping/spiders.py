@@ -1,4 +1,5 @@
 import re
+from time import sleep
 from typing import Union, List
 
 import requests
@@ -14,11 +15,11 @@ from secrets import web_scraping_api_key
 class QuestionSpider(scrapy.Spider):
     name = 'questions'
 
-    def __init__(self, start_urls: List[str], page_limit: int = None):
+    def __init__(self, start_url: str, page_limit: int = None):
         """ Initialize webdriver """
         self.pages_scrapped = 0
         self.page_limit = page_limit
-        self.start_urls = start_urls
+        self.start_urls = [start_url]
         super().__init__()
 
     def start_requests(self):
@@ -31,8 +32,6 @@ class QuestionSpider(scrapy.Spider):
 
     def parse(self, response: HtmlResponse) -> None:
         """ Parse URL """
-        if self.page_limit and self.page_limit == self.pages_scrapped:
-            return
         if 'https://api.webscrapingapi.com' in response.request.url:
             current_page_url = re.search(r'url=(http[s]*://.*)', response.request.url).group(1)
         else:
@@ -42,26 +41,24 @@ class QuestionSpider(scrapy.Spider):
         if not_a_robot_button:
             driver = WebDriver(response.request.url)
             driver.press_button(not_a_robot_button_xpath)
+            sleep(1)
             driver.solve_captcha(response)
             response = scrapy.Selector(text=driver.get_current_source())
 
         question_list = response.xpath('//' + Xpath.QUESTION_LIST)
-        self.parse_question_list(question_list)
-        self.pages_scrapped += 1
-        try:
-            next_page_url = self.get_next_page_url(response, current_page_url)
-            if google_cache_url := self.search_google_cache(next_page_url):
-                next_page_url = self.url_through_proxy(google_cache_url)
-            next_page_request = scrapy.Request(next_page_url, callback=self.parse)
-            yield next_page_request
-        except LastPage:
-            pass
-
-    def parse_question_list(self, question_list: scrapy.Selector) -> None:
-        """ Parse list of questions on page """
         for number_on_page, question in enumerate(question_list):
             parsed_question = self.parse_question(question)
             yield parsed_question
+        self.pages_scrapped += 1
+        if self.page_limit is None or self.page_limit < self.pages_scrapped:
+            try:
+                next_page_url = self.get_next_page_url(response, current_page_url)
+                if google_cache_url := self.search_google_cache(next_page_url):
+                    next_page_url = self.url_through_proxy(google_cache_url)
+                next_page_request = scrapy.Request(next_page_url, callback=self.parse)
+                yield next_page_request
+            except LastPage:
+                pass
 
     def parse_question(self, question_selector: scrapy.Selector) -> dict:
         """ Parse single question """
